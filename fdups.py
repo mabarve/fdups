@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import  getopt, sys
+import getopt, sys, os
 
 # Settings local to the script
 
@@ -16,12 +16,13 @@ CLDBG_VER1  = 6 # Details' verbosity level-1
 __def_debug      = CLDBG_SNGL # Default debug level
 __def_verbose    = CLDBG_DSU  # Default debug level
 
-def usage(progname) :
+def usage(progname, basedir) :
     print(progname + " [options]\n\n")
 
     print("[(-d | --debug) <debuglevel>]\t(default=%d). " % __def_debug)
     print("\t\t\t\tdebug level: higher value prints more info.\n")
-    print("[(-D | --dir) <directory>]\tBase directory for file search. (default=\'./\')")
+    print("[(-D | --dir) <directory>]\tBase directory for file search. (default=\'%s')" %
+          basedir)
     print("-h\t\t\t\tThis help message.")
     print("--help\t\t\t\tMore extensive help message.")
     print("\n\n")
@@ -30,9 +31,10 @@ def usage(progname) :
     # usage() ends
 
 def process_input():
-
     '''Entry level function for unit testing this script file.
     '''
+
+    basedir = os.getcwd()
 
     try:
         opts, args = getopt.getopt(
@@ -41,11 +43,10 @@ def process_input():
 
     except getopt.GetoptError as input_err:
         print(input_err)
-        usage(sys.argv[0])
+        usage(sys.argv[0], basedir)
         sys.exit(2)
 
     debug = __def_debug
-    basedir = "./"
 
     for arg, argval in opts:
         if arg in ("-d", "--debug") :
@@ -53,7 +54,7 @@ def process_input():
         elif arg in ("-D", "--dir") :
             basedir = str(argval)
         elif arg in ("-h", "--help") :
-            usage(sys.argv[0])
+            usage(sys.argv[0], basedir)
             sys.exit()
         elif arg in ("-v", "--verbose") :
             debug = __def_verbose
@@ -68,6 +69,15 @@ def process_input():
     return inargs
 
 
+def get_files(basedir, nodir = True) :
+    result = []
+
+    for prfx, dirs, hits in os.walk(basedir) :
+        for x in hits :
+            result.append(prfx + "/" + x)
+
+    return result
+
 #############################################################################################
 #############################################################################################
 #############################################################################################
@@ -77,6 +87,13 @@ def main():
 
     inargs = process_input()
     debug = inargs['debug']
+    files = get_files(inargs['basedir'])
+
+    count = 0
+    for fx in files :
+        print("%04d: %s" % (count, fx))
+        stats = os.fstat(fx)
+        count += 1
 
     return 0
 
