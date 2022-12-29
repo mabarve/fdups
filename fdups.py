@@ -15,6 +15,7 @@ CLDBG_VER1  = 6 # Details' verbosity level-1
 
 __def_debug      = CLDBG_BFL # Default debug level
 __def_verbose    = CLDBG_DSU  # Default debug level
+__def_hash_algo  = "sha1" # Default file hashing algorithm
 
 def usage(progname, basedir) :
     print(progname + " [options]\n\n")
@@ -33,6 +34,9 @@ def usage(progname, basedir) :
           " reported.\n\t\t\t\tThis feature is deemed useful before merging a new reference "
           " directory content\n\t\t\t\twith the existing, large base directory.\n")
           
+    print("[(-H | --hash) <algorith>]\tHash algorithm (md5/ sha1/ sha256)"
+          "\n\t\t\t\t(default is '%s')\n" % (__def_hash_algo))
+
     print("-h\t\t\t\tThis help message.\n")
     print("--help\t\t\t\tMore extensive help message.\n")
     print("[-v | --verbose]\t\t(default=%d)" % __def_verbose)
@@ -48,8 +52,9 @@ def process_input():
 
     try:
         opts, args = getopt.getopt(
-                        sys.argv[1:], "d:D:hR:v",
-                        ["debug=", "dir=", "help", "refdir", "verbose"])
+                        sys.argv[1:], "d:D:hH:R:v",
+                        ["debug=", "dir=", "help", "hash",
+                         "refdir", "verbose"])
 
     except getopt.GetoptError as input_err:
         print(input_err)
@@ -63,12 +68,21 @@ def process_input():
     inargs['filename'] = ''
     inargs['singlefile'] = False
     inargs['errno'] = 0
+    inargs['hash_algo'] = __def_hash_algo
 
     for arg, argval in opts:
         if arg in ("-d", "--debug") :
           inargs['debug'] = int(argval)
         elif arg in ("-D", "--dir") :
           inargs['basedir'] = str(argval)
+        elif arg in ("-H", "--hash") :
+          hasher = get_hasher(str(argval))
+          if not hasher :
+              print("Invalid hash algorithm: %s.\nCorrect Syntax:\n" %
+                    (str(argval)))
+              usage(sys.argv[0], basedir)
+              sys.exit()
+          inargs['hash_algo'] = str(argval)
         elif arg in ("-h", "--help") :
             usage(sys.argv[0], basedir)
             sys.exit()
@@ -76,23 +90,45 @@ def process_input():
           inargs['refdir'] = str(argval)
         elif arg in ("-v", "--verbose") :
           inargs['debug'] = __def_verbose
-        else:
+        else :
             assert False, "unknown option %s" % arg
     # end-for
 
     return inargs
 
 
-def get_file_hash(filename) :
+def get_hasher(algo) :
+
+    if 'md5' == algo.lower() :
+        return hashlib.md5()
+    elif 'sha1' == algo.lower() :
+        return hashlib.sha1()
+    elif 'sha256' == algo.lower() :
+        return hashlib.sha256()
+    elif 'sha384' == algo.lower() :
+        return hashlib.sha384()
+    elif 'sha512' == algo.lower() :
+        return hashlib.sha512()
+
+    return None
+
+def get_file_hash(inargs, filename) :
     status = False
     hashval = ''
+    fn = 'get_file_hash'
 
     # BUF_SIZE is totally arbitrary, change for your app!
     BUF_SIZE = 65536  # lets read stuff in 64kb chunks!
 
+    # hasher = inargs['hasher']
     # hasher = hashlib.md5()
-    hasher = hashlib.sha1()
-    # hasher = hashlib.sha256()
+    print("hash_algo: {}".format(inargs['hash_algo']))
+ 
+    hasher = get_hasher(inargs['hash_algo'])
+
+    if not hasher :
+        print("{} Invalid hasher handle".format(fn))
+        return (status, hashval)
 
     with open(filename, 'rb') as f:
         while True:
@@ -146,7 +182,7 @@ def build_frec(inargs, basedir, frec, fdup) :
 
             # Arrange based on file-size & file-hash
             # This helps fast searching for duplicates
-            (hash_done, file_hash) = get_file_hash(full_name)
+            (hash_done, file_hash) = get_file_hash(inargs, full_name)
 
             if not hash_done :
                 # Error condition
@@ -219,8 +255,8 @@ def main():
             for hx in fdup[dx].keys() :
                 group_size = len(fdup[dx][hx])
                 if (1 < group_size) :
-                    print("Duplicate Group# {}\tgroup-size: {}\tHash: {}".
-                          format(groups, group_size, hx))
+                    print("Group# {}\tgroup-size: {}\tHash({}): {}".
+                          format(groups, group_size, inargs['hash_algo'], hx))
                     groups += 1
                     for fx in fdup[dx][hx] : print(fx)
                     print("")
