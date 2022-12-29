@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import getopt, sys, os
+import getopt, hashlib, os, re, sys
 
 # Settings local to the script
 
@@ -13,7 +13,7 @@ CLDBG_DSU  =  4 # Print details on successful cases
 CLDBG_EXE  =  5 # Details on test execution
 CLDBG_VER1  = 6 # Details' verbosity level-1
 
-__def_debug      = CLDBG_SNGL # Default debug level
+__def_debug      = CLDBG_BFL # Default debug level
 __def_verbose    = CLDBG_DSU  # Default debug level
 
 def usage(progname, basedir) :
@@ -21,12 +21,22 @@ def usage(progname, basedir) :
 
     print("[(-d | --debug) <debuglevel>]\t(default=%d). " % __def_debug)
     print("\t\t\t\tdebug level: higher value prints more info.\n")
-    print("[(-D | --dir) <directory>]\tBase directory for file search. (default=\'%s')" %
+    print("[(-D | --dir) <directory>]\tBase directory for file search."
+          "\n\t\t\t\t(default is $PWD i.e., \'%s')\n" %
           basedir)
-    print("-h\t\t\t\tThis help message.")
-    print("--help\t\t\t\tMore extensive help message.")
-    print("\n\n")
+
+    print("[(-R | --refdir) <directory>]\tReference directory for file search. "
+          "Search for duplicates is restricted to\n\t\t\t\tfiles within this tree or"
+          " the files from the base directory that are also\n\t\t\t\tpresent in the"
+          " reference directory. Files within the base directory that are " 
+          "\n\t\t\t\tduplicates of each other but are missing from the reference are NOT "
+          " reported.\n\t\t\t\tThis feature is deemed useful before merging a new reference "
+          " directory content\n\t\t\t\twith the existing, large base directory.\n")
+          
+    print("-h\t\t\t\tThis help message.\n")
+    print("--help\t\t\t\tMore extensive help message.\n")
     print("[-v | --verbose]\t\t(default=%d)" % __def_verbose)
+    print("\n")
 
     # usage() ends
 
@@ -38,62 +48,182 @@ def process_input():
 
     try:
         opts, args = getopt.getopt(
-                        sys.argv[1:], "d:D:hv",
-                        ["debug=", "dir=", "help", "verbose"])
+                        sys.argv[1:], "d:D:hR:v",
+                        ["debug=", "dir=", "help", "refdir", "verbose"])
 
     except getopt.GetoptError as input_err:
         print(input_err)
         usage(sys.argv[0], basedir)
         sys.exit(2)
 
-    debug = __def_debug
+
+    inargs = {}
+    inargs['debug'] = __def_debug
+    inargs['basedir'] = basedir
+    inargs['filename'] = ''
+    inargs['singlefile'] = False
+    inargs['errno'] = 0
 
     for arg, argval in opts:
         if arg in ("-d", "--debug") :
-            debug = int(argval)
+          inargs['debug'] = int(argval)
         elif arg in ("-D", "--dir") :
-            basedir = str(argval)
+          inargs['basedir'] = str(argval)
         elif arg in ("-h", "--help") :
             usage(sys.argv[0], basedir)
             sys.exit()
+        elif arg in ("-R", "--refdir") :
+          inargs['refdir'] = str(argval)
         elif arg in ("-v", "--verbose") :
-            debug = __def_verbose
+          inargs['debug'] = __def_verbose
         else:
             assert False, "unknown option %s" % arg
     # end-for
 
-    inargs = {}
-    inargs['debug'] = debug
-    inargs['basedir'] = basedir
-    inargs['errno'] = 0
     return inargs
 
 
-def get_files(basedir, nodir = True) :
-    result = []
+def get_file_hash(filename) :
+    status = False
+    hashval = ''
 
-    for prfx, dirs, hits in os.walk(basedir) :
-        for x in hits :
-            result.append(prfx + "/" + x)
+    # BUF_SIZE is totally arbitrary, change for your app!
+    BUF_SIZE = 65536  # lets read stuff in 64kb chunks!
 
-    return result
+    # hasher = hashlib.md5()
+    hasher = hashlib.sha1()
+    # hasher = hashlib.sha256()
 
-#############################################################################################
-#############################################################################################
+    with open(filename, 'rb') as f:
+        while True:
+            data = f.read(BUF_SIZE)
+            status = True # Should work for empty files too
+
+            if not data : break
+
+            hasher.update(data)
+
+    hashval = hasher.hexdigest()
+
+    # get_file_hash()
+    return (status, hashval)
+
+def build_frec(inargs, basedir, frec, fdup) :
+    count = 0
+    fn = 'build_frec'
+
+    first_pass = (0 == len(fdup.keys()))
+
+    for prfx, dirs, hits in os.walk(basedir, followlinks = False) :
+
+        for fx in hits :
+            full_name  = prfx + "/" + fx
+
+            # clean any multiple '/' in the full path
+            full_name = re.sub("//", "/", full_name)
+
+            if full_name in frec.keys() :
+                # Error condition
+                if first_pass and (CLDBG_BFL <= inargs['debug']) :
+                    print("duplicate_file=[%s] skipping.." % (full_name))
+                    print(frec[full_name])
+                continue # :TODO: should we abort??
+
+            file_size = os.path.getsize(full_name)
+
+            if (not first_pass) and (file_size not in fdup.keys()) :
+                # We want to skip this entry because we will only consider
+                # files in subsequent passes that can possibly be duplicate
+                # with the files found in the first pass. If the file_size
+                # is new, it means there were no files in the first pass
+                # with the same file_size. While checking for duplicates,
+                # there is no need to compute the expensive file hash if
+                # the file sizes are not matching in order
+                if (CLDBG_EXE <= inargs['debug']) :
+                    print("skipping file {} from second (or higher) pass".format(
+                        full_name))
+                continue
+
+            # Arrange based on file-size & file-hash
+            # This helps fast searching for duplicates
+            (hash_done, file_hash) = get_file_hash(full_name)
+
+            if not hash_done :
+                # Error condition
+                if (CLDBG_BFL <= inargs['debug']) :
+                    print("Failure hashing=[%s] skipping" % (full_name))
+                continue # :TODO: should we abort??
+
+            if file_size not in fdup.keys() :
+                fdup[file_size] = dict()
+                fdup[file_size][file_hash] = list()
+                fdup[file_size][file_hash].append(full_name)
+            else :
+                if file_hash not in fdup[file_size].keys() :
+                    fdup[file_size][file_hash] = list()
+                else :
+                    if not (full_name in fdup[file_size][file_hash]) :
+                        # We have found a duplicate !
+                        count += 1
+
+                        if (CLDBG_VER1 <= inargs['debug']) :
+                            print("%s is_duplicate in=>" % (full_name))
+                            print(fdup[file_size])
+                        elif (CLDBG_DFL <= inargs['debug']) :
+                            print("%s is_duplicate" % (full_name))
+
+                    # Finally add the duplicate entry
+                    fdup[file_size][file_hash].append(full_name)
+                
+            frec[full_name] = dict()
+            frec[full_name]['size'] = file_size
+            frec[full_name]['hash'] = file_hash
+
+            if (CLDBG_VER1 <= inargs['debug']) :
+                print("%s prefix[%s]\t[%s] size=%ld" %
+                      (fn, prfx, fx, file_size))
+
+    # build_frec()
+    return (count, frec, fdup)
+
 #############################################################################################
 
 
 def main():
 
+    fn = 'main'
     inargs = process_input()
     debug = inargs['debug']
-    files = get_files(inargs['basedir'])
-
+    frec = dict()
+    fdup = dict()
+    dup_count = 0
     count = 0
-    for fx in files :
-        print("%04d: %s" % (count, fx))
-        stats = os.fstat(fx)
-        count += 1
+
+    if 'refdir' in inargs.keys() :
+        (count, frec, fdup) = build_frec(inargs, inargs['refdir'], frec, fdup)
+
+    (dup_count, frec, fdup) = build_frec(inargs, inargs['basedir'], frec, fdup)
+
+    if (0 < count) : dup_count += count
+
+    if (CLDBG_VER1 <= inargs['debug']) :
+        print("\n{} dup_count={}".format(fn, dup_count))
+        print("\n{} frec=>".format(fn))
+        print(frec)
+        print("\n{} fdup=>".format(fn))
+        print(fdup)
+    elif (CLDBG_BFL <= inargs['debug']) :
+        print("\nTotal duplicate file groups: {}\n".format(dup_count))
+        groups = 0
+        for dx in fdup.keys() :
+            for hx in fdup[dx].keys() :
+                group_size = len(fdup[dx][hx])
+                if (1 < group_size) :
+                    print("Duplicate Group# {}\tgroup-size: {}\tHash: {}".
+                          format(groups, group_size, hx))
+                    groups += 1
+                    for fx in fdup[dx][hx] : print(fx)
+                    print("")
 
     return 0
 
