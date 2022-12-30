@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import getopt, hashlib, os, re, sys
+import datetime, getopt, hashlib, os, re, sys
 
 # Settings local to the script
 
@@ -12,6 +12,7 @@ CLDBG_DFL  =  3 # Print detailed info on failures
 CLDBG_DSU  =  4 # Print details on successful cases
 CLDBG_EXE  =  5 # Details on test execution
 CLDBG_VER1  = 6 # Details' verbosity level-1
+CLDBG_VER2  = 7 # Details' verbosity level-1
 
 __def_debug      = CLDBG_BFL # Default debug level
 __def_verbose    = CLDBG_DSU  # Default debug level
@@ -209,14 +210,14 @@ def build_frec(inargs, basedir, frec, fdup) :
                         # We have found a duplicate !
                         count += 1
 
-                        if (CLDBG_VER1 <= inargs['debug']) :
+                        if (CLDBG_VER2 <= inargs['debug']) :
                             print("%s is_duplicate in=>" % (full_name))
                             print(fdup[file_size])
-                        elif (CLDBG_DFL <= inargs['debug']) :
+                        elif (CLDBG_VER1 <= inargs['debug']) :
                             print("%s is_duplicate" % (full_name))
 
-                    # Finally add the duplicate entry
-                    fdup[file_size][file_hash].append(full_name)
+                # Finally add the duplicate entry
+                fdup[file_size][file_hash].append(full_name)
                 
             frec[full_name] = dict()
             frec[full_name]['size'] = file_size
@@ -240,6 +241,8 @@ def search_and_report():
     frec = dict()
     fdup = dict()
 
+    time_stamp_1 = datetime.datetime.now()
+
     if 'refdir' in inargs.keys() :
         # Check duplicate files within the reference tree
         # Subsequently the base-directory will be searched
@@ -253,6 +256,13 @@ def search_and_report():
     # Final computation of duplicates
     (count, frec, fdup) = build_frec(inargs, inargs['basedir'], frec, fdup)
 
+    time_stamp_2 = datetime.datetime.now()
+
+    if (CLDBG_EXE <= inargs['debug']) :
+        time_delta = time_stamp_2 - time_stamp_1
+        print("\n{} total search time {} seconds\n".format(
+            fn, time_delta.total_seconds()))
+        
     # Analyze the results
     count = 0
     groups = 0
