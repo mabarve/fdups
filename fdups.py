@@ -23,6 +23,59 @@ __def_follow_links      = False # Default file hashing algorithm
 __def_buf_size          = 1048576  # lets read stuff in 64kb chunks!
 
 
+__design_doc = """
+ **** Design Documentation ****
+
+ This script works in one of the two modes:
+
+ Mode-1: It scans all the files in a given directory tree and identifies
+ duplicate files and reports those.
+
+ Mode-2: It scans a directory (usually smaller) tree and finds any duplicates
+ within that tree. Then it scans a larger directory tree and finds ONLY those
+ files that have any duplicates in the smaller tree. this mode is useful
+ before amalgamating a smaller tree with a larger one.
+
+
+ For any two files to be identical, their sizes AND hash must match. Comparing
+ file sizes is relatively inexpensive compared to computing file hash. This is
+ leveraged in the design. Files are first sorted according to their size. Then
+ only those size groups containing multiple files are subjected to hashing.
+
+
+ Hash computation involves reading all the bytes of a given file and passing
+ those through a hash-computation block (i.e. 'hasher' in our design). Reading
+ the file in it's entirety is done iteratively by using a temporary buffer. This
+ way files of arbitrarily large size (e.g. hundreds of gigabytes) can be safely
+ hashed without risking memory exhaustion. However size of the temporary buffer
+ does impact the run time performance. We use a descent value for buffer size
+ as default but also let users override this with their choice.
+
+
+ By default, symbolic links to directories and files are ignored by the search
+ logic, but users can include symbolic links by adding a command line option.
+
+
+ Comparing files of zero size is meaningless. Any two files, created for very
+ different purposes will appear as identical if both are empty. This is because
+ their sizes (0 bytes) and hash values match. Hasher produces a fixed value
+ for zero-byte files for a given hashing algorithm. Users can enable the
+ 'zero comparison' by adding a command line option.
+
+
+ Run time complexity varies with the choice of hashing algorithms. This tool
+ offers user selectable hashing algorithm (with a default value).
+
+
+ This module can be used as a library if the callers invoke "search_and_report()"
+ Alternatively the modules can be directly invoked as a command-line utility.
+
+"""
+
+def show_doc() :
+    print(__design_doc)
+
+
 def usage(progname, basedir) :
     print(progname + " [options]\n\n")
 
@@ -46,7 +99,7 @@ def usage(progname, basedir) :
           " reported.\n\t\t\t\tThis feature is deemed useful before merging a new reference "
           " directory content\n\t\t\t\twith the existing, large base directory.\n")
 
-    print("[(-H | --hash) <algorith>]\tFile hashing algorithm "
+    print("[(-H | --hash) <algorithm>]\tFile hashing algorithm "
           "(md5/ sha1/ sha256/ sha384/ sha512)"
           "\n\t\t\t\t(default is '%s')\n" % (__def_hash_algo))
 
@@ -56,7 +109,8 @@ def usage(progname, basedir) :
     print("[-l | --links]\t\t\t(default={}) Also check symbolic links.\n".format(
         __def_follow_links))
 
-    print("[-v | --verbose]\t\t(default=%d)" % __def_verbose)
+    print("[-s | --stats]\t\t\tPrint additional statistics.\n")
+    print("[-v | --verbose]\t\t(default=%d)\n" % __def_verbose)
     print("[-z | --zero-compare]\t\tCompare zero-byte size files, which usually "
           "isn't very meaningful. ")
     print("\n")
@@ -71,10 +125,10 @@ def process_input():
 
     try:
         opts, args = getopt.getopt(
-                        sys.argv[1:], "b:d:D:hH:lR:vz",
+                        sys.argv[1:], "b:d:D:hH:lR:svz",
                         ["buffer-size=", "debug=", "dir=",
                          "help", "hash=", "links", "refdir=",
-                         "verbose", "zero-compare"])
+                         "stats", "verbose", "zero-compare"])
 
     except getopt.GetoptError as input_err:
         print(input_err)
@@ -92,6 +146,7 @@ def process_input():
     inargs['hash_algo'] = __def_hash_algo
     inargs['follow_links'] = __def_follow_links
     inargs['zero_cmp'] = False
+    inargs['stats'] = False
 
     for arg, argval in opts:
         if arg in ("-b", "--buffer-size") :
@@ -108,13 +163,19 @@ def process_input():
               usage(sys.argv[0], basedir)
               sys.exit()
           inargs['hash_algo'] = str(argval)
-        elif arg in ("-h", "--help") :
+        elif arg in ("-h") :
             usage(sys.argv[0], basedir)
+            sys.exit()
+        elif arg in ("--help") :
+            usage(sys.argv[0], basedir)
+            show_doc()
             sys.exit()
         elif arg in ("-l", "--links") :
           inargs['follow_links'] = True
         elif arg in ("-R", "--refdir") :
           inargs['refdir'] = str(argval)
+        elif arg in ("-s", "--stats") :
+          inargs['stats'] = True
         elif arg in ("-v", "--verbose") :
           inargs['debug'] = __def_verbose
         elif arg in ("-z", "--zero-compare") :
@@ -308,13 +369,13 @@ def build_frec(inargs, basedir, frec, fdup) :
 #############################################################################################
 
 
-def search_and_report():
+def search_and_report(inargs):
 
-    fn = 'main'
-    inargs = process_input()
+    fn = 'search_and_report'
     debug = inargs['debug']
     frec = dict()
     fdup = dict()
+    fstats = dict()
 
     time_stamp_1 = datetime.datetime.now()
 
@@ -332,19 +393,35 @@ def search_and_report():
     (count, frec, fdup) = build_frec(inargs, inargs['basedir'], frec, fdup)
 
     time_stamp_2 = datetime.datetime.now()
+    time_delta = time_stamp_2 - time_stamp_1
 
     if (CLDBG_EXE <= inargs['debug']) :
-        time_delta = time_stamp_2 - time_stamp_1
         print("\n{} total search time {} seconds\n".format(
             fn, time_delta.total_seconds()))
-        
+
     # Analyze the results
     count = 0
     groups = 0
+    fstats['unq_files'] = 0
+    fstats['dup_files'] = 0
+    fstats['dup_groups'] = 0
+    fstats['sz_tot'] = 0
+    fstats['sz_unq'] = 0
+    fstats['sz_dup'] = 0
+    fstats['hashed_files'] = 0
+
     for dx in fdup.keys() :
         for hx in fdup[dx].keys() :
             if __tmp_rec == hx :
                 # Special entry to be skipped
+                if 1 == len(fdup[dx]) :
+                    # This is the only record for a given file-size dx.
+                    # It means it's a file without duplicates. Update the stats
+                    fstats['unq_files'] += 1
+                    fname = fdup[dx][hx]
+                    fsize = frec[fname]['size']
+                    fstats['sz_tot'] += fsize
+                    fstats['sz_unq'] += fsize
                 continue
 
             group_size = len(fdup[dx][hx])
@@ -358,6 +435,24 @@ def search_and_report():
 
                 count += group_size
                 groups += 1
+                fstats['dup_files'] += group_size
+                fstats['dup_groups'] += 1
+
+                fname = fdup[dx][hx][0]
+                fsize = frec[fname]['size']
+                sz_grp = group_size * fsize
+                fstats['sz_tot'] += sz_grp
+                fstats['sz_dup'] += sz_grp
+                fstats['hashed_files'] += group_size
+            elif (1 == group_size) :
+                # Only file with a given hash value hx
+                fstats['unq_files'] += 1
+
+                fname = fdup[dx][hx][0]
+                fsize = frec[fname]['size']
+                fstats['sz_tot'] += fsize
+                fstats['sz_unq'] += fsize
+                fstats['hashed_files'] += 1
 
     # Report the results
     if (0 < groups) :
@@ -367,7 +462,40 @@ def search_and_report():
         elif (CLDBG_SNGL <= inargs['debug']) :
             print(count)
 
-    return (count, frec, fdup)
+    # Compute additional statistics
+    fstats['processed_files'] = len(frec.keys())
+    fstats['prcnt_dup'] = 100.0 * fstats['dup_files'] / fstats['processed_files']
+    fstats['prcnt_unq'] = 100.0 * fstats['unq_files'] / fstats['processed_files']
+    fstats['prcnt_sz_unq'] = 100.0 * fstats['sz_unq'] / fstats['sz_tot']
+    fstats['prcnt_sz_dup'] = 100.0 * fstats['sz_dup'] / fstats['sz_tot']
+
+    # Print statistics
+    if inargs['stats'] :
+        print("\nExtended Statistics=>\n")
+        print("Processed Files:\t\t{}".format(fstats['processed_files']))
+        print("Unique Files:\t\t\t{}".format(fstats['dup_files']))
+        print("Duplicate Files:\t\t{}".format(fstats['unq_files']))
+        print("% Unique Files:\t\t\t{} %".format(fstats['prcnt_unq']))
+        print("% Duplicate Files:\t\t{} %".format(fstats['prcnt_dup']))
+        print("Total space consumed:\t\t{} bytes".format(fstats['sz_tot']))
+        print("Unique space consumed:\t\t{} bytes".format(fstats['sz_unq']))
+        print("Duplicate space consumed:\t{} bytes".format(fstats['sz_dup']))
+        print("% Unique/ Total space:\t\t{} %".format(fstats['prcnt_sz_unq']))
+        print("% Duplicate/ Total space:\t{} %".format(fstats['prcnt_sz_dup']))
+        print("File search time:\t\t{} seconds".format(time_delta.total_seconds()))
+        print("Hashing algorithm:\t\t{}".format(inargs['hash_algo'].upper()))
+        print("Total files hashed:\t\t{}".format(fstats['hashed_files']))
+        print("")
+
+
+    # Return the results to the caller. If some other module
+    # called this method, they will get various data-structures
+    # as the result from this module.
+    return (count, frec, fdup, fstats)
+
+def main():
+    inargs = process_input() # Process User Inputs
+    search_and_report(inargs) # Invoke the processor
 
 if __name__ == "__main__" :
-    search_and_report()
+    main()
