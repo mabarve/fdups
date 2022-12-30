@@ -20,11 +20,17 @@ __def_debug             = CLDBG_BFL # Default debug level
 __def_verbose           = CLDBG_DSU  # Default debug level
 __def_hash_algo         = "sha1" # Default file hashing algorithm
 __def_follow_links      = False # Default file hashing algorithm
-__def_buf_size          = 65536  # lets read stuff in 64kb chunks!
+__def_buf_size          = 1048576  # lets read stuff in 64kb chunks!
 
 
 def usage(progname, basedir) :
     print(progname + " [options]\n\n")
+
+    print("[(-b | --buffer-size) <in-bytes>] (default=%d). "
+          "Temporary buffer size for reading file contents\n\t\t\t\tduring "
+          "the hash computation process. Generally larger buffer"
+          " space\n\t\t\t\timproves the read IO performance at the cost of"
+          " higher run time memory consumption.\n" % (__def_buf_size))
 
     print("[(-d | --debug) <debuglevel>]\t(default=%d). " % __def_debug)
     print("\t\t\t\tdebug level: higher value prints more info.\n")
@@ -47,10 +53,12 @@ def usage(progname, basedir) :
     print("-h\t\t\t\tThis help message.\n")
     print("--help\t\t\t\tMore extensive help message.\n")
 
-    print("[-l | --links]\t\t\t(default={}) Also check symbolic links".format(
+    print("[-l | --links]\t\t\t(default={}) Also check symbolic links.\n".format(
         __def_follow_links))
 
     print("[-v | --verbose]\t\t(default=%d)" % __def_verbose)
+    print("[-z | --zero-compare]\t\tCompare zero-byte size files, which usually "
+          "isn't very meaningful. ")
     print("\n")
 
     # usage() ends
@@ -63,9 +71,10 @@ def process_input():
 
     try:
         opts, args = getopt.getopt(
-                        sys.argv[1:], "d:D:hH:lR:v",
-                        ["debug=", "dir=", "help", "hash=",
-                         "links", "refdir=", "verbose"])
+                        sys.argv[1:], "b:d:D:hH:lR:vz",
+                        ["buffer-size=", "debug=", "dir=",
+                         "help", "hash=", "links", "refdir=",
+                         "verbose", "zero-compare"])
 
     except getopt.GetoptError as input_err:
         print(input_err)
@@ -74,6 +83,7 @@ def process_input():
 
 
     inargs = {}
+    inargs['buf_size'] = __def_buf_size
     inargs['debug'] = __def_debug
     inargs['basedir'] = basedir
     inargs['filename'] = ''
@@ -81,9 +91,12 @@ def process_input():
     inargs['errno'] = 0
     inargs['hash_algo'] = __def_hash_algo
     inargs['follow_links'] = __def_follow_links
+    inargs['zero_cmp'] = False
 
     for arg, argval in opts:
-        if arg in ("-d", "--debug") :
+        if arg in ("-b", "--buffer-size") :
+          inargs['buf_size'] = int(argval)
+        elif arg in ("-d", "--debug") :
           inargs['debug'] = int(argval)
         elif arg in ("-D", "--dir") :
           inargs['basedir'] = str(argval)
@@ -104,6 +117,8 @@ def process_input():
           inargs['refdir'] = str(argval)
         elif arg in ("-v", "--verbose") :
           inargs['debug'] = __def_verbose
+        elif arg in ("-z", "--zero-compare") :
+          inargs['zero_cmp'] =  True
         else :
             assert False, "unknown option %s" % arg
     # end-for
@@ -138,9 +153,11 @@ def get_file_hash(inargs, filename) :
         print("{} Invalid hasher handle".format(fn))
         return (status, hashval)
 
+    bsize = inargs['buf_size']
+
     with open(filename, 'rb') as f:
         while True:
-            data = f.read(__def_buf_size)
+            data = f.read(bsize)
             status = True # Should work for empty files too
 
             if not data : break
@@ -155,6 +172,7 @@ def get_file_hash(inargs, filename) :
 def build_frec(inargs, basedir, frec, fdup) :
     count = 0
     fn = 'build_frec'
+    zero_cmp = inargs['zero_cmp'] # Avoiding reading inargs multiple times
 
     first_pass = (0 == len(fdup.keys()))
 
@@ -176,6 +194,15 @@ def build_frec(inargs, basedir, frec, fdup) :
                 continue # :TODO: should we abort??
 
             file_size = os.path.getsize(full_name)
+
+            if (0 == file_size) :
+                if zero_cmp :
+                    if (CLDBG_VER1 <= inargs['debug']) :
+                        print("processing zero-byte size file {}".format(full_name))
+                else :
+                    if (CLDBG_VER1 <= inargs['debug']) :
+                        print("skipping zero-byte size file {}".format(full_name))
+                    continue
 
             if (not first_pass) and (file_size not in fdup.keys()) :
                 # We want to skip this entry because we will only consider
@@ -199,10 +226,14 @@ def build_frec(inargs, basedir, frec, fdup) :
 
             if file_size not in fdup.keys() :
                 # We have found the first file with 'file_size'. We won't compute
-                # it's hash for now. Hash computatio is an expensive function and
+                # it's hash for now. Hash computation is an expensive function and
                 # we will only compute it if there are multiple files with the same
-                # size. So we defer the hash computation on the first one by stashing
-                # it in a special_record
+                # size. So we defer the hash computation of the first file by stashing
+                # it in a special location called '__tmp_rec'. However this is done
+                # only once for a given file size. When we encounter the second file
+                # with the same size, we compute hash on the first (__tmp_rec) and the
+                # second file. Any additional files (third/ fourth etc.) are immediately
+                # hashed.
                 fdup[file_size] = dict()
                 fdup[file_size][__tmp_rec] = full_name
             else :
@@ -232,8 +263,7 @@ def build_frec(inargs, basedir, frec, fdup) :
                                       (tmp_file))
                                 continue # :TODO: should we abort??
 
-                        fdup[file_size][file_hash] = list()
-                        fdup[file_size][file_hash].append(tmp_file)
+                        fdup[file_size][file_hash] = [tmp_file]
                         frec[tmp_file]['hash'] = file_hash
 
                         # Permanently disable this record by writing empty filename
