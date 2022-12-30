@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import getopt, hashlib, os, re, sys
+import datetime, getopt, hashlib, os, re, sys
 
 # Settings local to the script
 
@@ -12,11 +12,17 @@ CLDBG_DFL  =  3 # Print detailed info on failures
 CLDBG_DSU  =  4 # Print details on successful cases
 CLDBG_EXE  =  5 # Details on test execution
 CLDBG_VER1  = 6 # Details' verbosity level-1
+CLDBG_VER2  = 7 # Details' verbosity level-1
 
-__def_debug      = CLDBG_BFL # Default debug level
-__def_verbose    = CLDBG_DSU  # Default debug level
-__def_hash_algo  = "sha1" # Default file hashing algorithm
-__def_follow_links  = False # Default file hashing algorithm
+__tmp_rec = '0' # Temporary Record Identifier
+
+__def_debug             = CLDBG_BFL # Default debug level
+__def_verbose           = CLDBG_DSU  # Default debug level
+__def_hash_algo         = "sha1" # Default file hashing algorithm
+__def_follow_links      = False # Default file hashing algorithm
+__def_buf_size          = 65536  # lets read stuff in 64kb chunks!
+
+
 
 def usage(progname, basedir) :
     print(progname + " [options]\n\n")
@@ -30,11 +36,11 @@ def usage(progname, basedir) :
     print("[(-R | --refdir) <directory>]\tReference directory for file search. "
           "Search for duplicates is restricted to\n\t\t\t\tfiles within this tree or"
           " the files from the base directory that are also\n\t\t\t\tpresent in the"
-          " reference directory. Files within the base directory that are " 
+          " reference directory. Files within the base directory that are "
           "\n\t\t\t\tduplicates of each other but are missing from the reference are NOT "
           " reported.\n\t\t\t\tThis feature is deemed useful before merging a new reference "
           " directory content\n\t\t\t\twith the existing, large base directory.\n")
-          
+
     print("[(-H | --hash) <algorith>]\tFile hashing algorithm "
           "(md5/ sha1/ sha256/ sha384/ sha512)"
           "\n\t\t\t\t(default is '%s')\n" % (__def_hash_algo))
@@ -119,15 +125,13 @@ def get_hasher(algo) :
     elif 'sha512' == algo.lower() :
         return hashlib.sha512()
 
+    # get_hasher()
     return None
 
 def get_file_hash(inargs, filename) :
     status = False
     hashval = ''
     fn = 'get_file_hash'
-
-    # BUF_SIZE is totally arbitrary, change for your app!
-    BUF_SIZE = 65536  # lets read stuff in 64kb chunks!
 
     hasher = get_hasher(inargs['hash_algo'])
 
@@ -137,7 +141,7 @@ def get_file_hash(inargs, filename) :
 
     with open(filename, 'rb') as f:
         while True:
-            data = f.read(BUF_SIZE)
+            data = f.read(__def_buf_size)
             status = True # Should work for empty files too
 
             if not data : break
@@ -189,19 +193,62 @@ def build_frec(inargs, basedir, frec, fdup) :
 
             # Arrange based on file-size & file-hash
             # This helps fast searching for duplicates
-            (hash_done, file_hash) = get_file_hash(inargs, full_name)
 
-            if not hash_done :
-                # Error condition
-                if (CLDBG_BFL <= inargs['debug']) :
-                    print("Failure hashing=[%s] skipping" % (full_name))
-                continue # :TODO: should we abort??
+            file_hash = '00'
+            hash_done = False
+
 
             if file_size not in fdup.keys() :
+                # We have found the first file with 'file_size'. We won't compute
+                # it's hash for now. Hash computatio is an expensive function and
+                # we will only compute it if there are multiple files with the same
+                # size. So we defer the hash computation on the first one by stashing
+                # it in a special_record
                 fdup[file_size] = dict()
-                fdup[file_size][file_hash] = list()
-                fdup[file_size][file_hash].append(full_name)
+                fdup[file_size][__tmp_rec] = full_name
             else :
+                # Check for backlog and update if needed
+                if __tmp_rec in fdup[file_size].keys() :
+                    tmp_file = fdup[file_size][__tmp_rec]
+                    if (0 < len(tmp_file)) :
+                        # Delayed hash computation!!!
+                        # Previous entry remains to be processed. We only compute
+                        # it's hash now because there are more than 1 files with the
+                        # same size, potentially leading to duplicate files. Unless
+                        # that's the case, we don't compute hash for a file if it's
+                        # the only file of that size.
+                        (hash_done, file_hash) = get_file_hash(inargs, tmp_file)
+
+                        if not hash_done :
+                            # Error condition
+                            if (CLDBG_BFL <= inargs['debug']) :
+                                print("Failure hashing tmp=[%s] skipping" % (tmp_file))
+                                continue # :TODO: should we abort??
+
+                        if file_hash in fdup[file_size].keys() :
+                            # :TODO: Error Condition, we expected the 'file_size'
+                            # bin to be empty except for the special record __tmp_rec
+                            if (CLDBG_BFL <= inargs['debug']) :
+                                print("Unexpected hash-entry for =[%s] skipping." %
+                                      (tmp_file))
+                                continue # :TODO: should we abort??
+
+                        fdup[file_size][file_hash] = list()
+                        fdup[file_size][file_hash].append(tmp_file)
+                        frec[tmp_file]['hash'] = file_hash
+
+                        # Permanently disable this record by writing empty filename
+                        fdup[file_size][__tmp_rec] = ''
+
+                # '__tmp_rec' processed. Now compute hash for the current file
+                (hash_done, file_hash) = get_file_hash(inargs, full_name)
+
+                if not hash_done :
+                    # Error condition
+                    if (CLDBG_BFL <= inargs['debug']) :
+                        print("Failure hashing current=[%s] skipping" % (full_name))
+                        continue # :TODO: should we abort??
+
                 if file_hash not in fdup[file_size].keys() :
                     fdup[file_size][file_hash] = list()
                 else :
@@ -209,15 +256,15 @@ def build_frec(inargs, basedir, frec, fdup) :
                         # We have found a duplicate !
                         count += 1
 
-                        if (CLDBG_VER1 <= inargs['debug']) :
+                        if (CLDBG_VER2 <= inargs['debug']) :
                             print("%s is_duplicate in=>" % (full_name))
                             print(fdup[file_size])
-                        elif (CLDBG_DFL <= inargs['debug']) :
+                        elif (CLDBG_VER1 <= inargs['debug']) :
                             print("%s is_duplicate" % (full_name))
 
-                    # Finally add the duplicate entry
-                    fdup[file_size][file_hash].append(full_name)
-                
+                # Finally add the duplicate entry
+                fdup[file_size][file_hash].append(full_name)
+
             frec[full_name] = dict()
             frec[full_name]['size'] = file_size
             frec[full_name]['hash'] = file_hash
@@ -240,6 +287,8 @@ def search_and_report():
     frec = dict()
     fdup = dict()
 
+    time_stamp_1 = datetime.datetime.now()
+
     if 'refdir' in inargs.keys() :
         # Check duplicate files within the reference tree
         # Subsequently the base-directory will be searched
@@ -253,11 +302,22 @@ def search_and_report():
     # Final computation of duplicates
     (count, frec, fdup) = build_frec(inargs, inargs['basedir'], frec, fdup)
 
+    time_stamp_2 = datetime.datetime.now()
+
+    if (CLDBG_SUM <= inargs['debug']) :
+        search_time = time_stamp_2 - time_stamp_1
+        print("{} search-time {} seconds".format(
+            fn, search_time.total_seconds()))
+
     # Analyze the results
     count = 0
     groups = 0
     for dx in fdup.keys() :
         for hx in fdup[dx].keys() :
+            if __tmp_rec == hx :
+                # Special entry to be skipped
+                continue
+
             group_size = len(fdup[dx][hx])
             if (1 < group_size) :
 
