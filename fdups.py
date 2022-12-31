@@ -2,7 +2,9 @@
 
 import datetime, getopt, hashlib, os, re, sys
 
+####
 # Settings local to the script
+####
 
 # Debug Levels:
 CLDBG_SNGL =  0 # Only print number of failed test cases otherwise 0 on success
@@ -117,6 +119,7 @@ def usage(progname, basedir) :
 
     # usage() ends
 
+
 def process_input():
     '''Entry level function for unit testing this script file.
     '''
@@ -203,6 +206,7 @@ def get_hasher(algo) :
     # get_hasher()
     return None
 
+
 def get_file_hash(inargs, filename) :
     status = False
     hashval = ''
@@ -230,6 +234,7 @@ def get_file_hash(inargs, filename) :
     # get_file_hash()
     return (status, hashval)
 
+
 def build_frec(inargs, basedir, frec, fdup) :
     count = 0
     fn = 'build_frec'
@@ -245,14 +250,14 @@ def build_frec(inargs, basedir, frec, fdup) :
             full_name  = prfx + "/" + fx
 
             # clean any multiple '/' in the full path
-            full_name = re.sub("//", "/", full_name)
+            full_name = re.sub("/+", "/", full_name)
 
             if full_name in frec.keys() :
                 # Error condition
                 if first_pass and (CLDBG_BFL <= inargs['debug']) :
                     print("duplicate_file=[%s] skipping.." % (full_name))
                     print(frec[full_name])
-                continue # :TODO: should we abort??
+                continue
 
             file_size = os.path.getsize(full_name)
 
@@ -314,15 +319,15 @@ def build_frec(inargs, basedir, frec, fdup) :
                             # Error condition
                             if (CLDBG_BFL <= inargs['debug']) :
                                 print("Failure hashing tmp=[%s] skipping" % (tmp_file))
-                                continue # :TODO: should we abort??
+                                continue
 
                         if file_hash in fdup[file_size].keys() :
-                            # :TODO: Error Condition, we expected the 'file_size'
+                            # Error Condition, we expected the 'file_size'
                             # bin to be empty except for the special record __tmp_rec
                             if (CLDBG_BFL <= inargs['debug']) :
                                 print("Unexpected hash-entry for =[%s] skipping." %
                                       (tmp_file))
-                                continue # :TODO: should we abort??
+                                continue
 
                         fdup[file_size][file_hash] = [tmp_file]
                         frec[tmp_file]['hash'] = file_hash
@@ -337,7 +342,7 @@ def build_frec(inargs, basedir, frec, fdup) :
                     # Error condition
                     if (CLDBG_BFL <= inargs['debug']) :
                         print("Failure hashing current=[%s] skipping" % (full_name))
-                        continue # :TODO: should we abort??
+                        continue
 
                 if file_hash not in fdup[file_size].keys() :
                     fdup[file_size][file_hash] = list()
@@ -380,13 +385,11 @@ def search_and_report(inargs):
     time_stamp_1 = datetime.datetime.now()
 
     if 'refdir' in inargs.keys() :
-        # Check duplicate files within the reference tree
-        # Subsequently the base-directory will be searched
-        # only for files that can potentially be identical
-        # to some from the reference directory. In other words
-        # if there duplicates present in the base-directory without
-        # any matching files in the reference directory, those will
-        # will be silently ignored.
+        # Check duplicate files within the reference tree. Subsequently the
+        # base-directory will be searched only for files that can potentially
+        # be identical to some from the reference directory. In other words if
+        # there are duplicates in the base-directory without any matching files
+        # in the reference directory, those will be silently ignored.
         (count, frec, fdup) = build_frec(inargs, inargs['refdir'], frec, fdup)
 
     # Final computation of duplicates
@@ -422,7 +425,7 @@ def search_and_report(inargs):
                     fsize = frec[fname]['size']
                     fstats['sz_tot'] += fsize
                     fstats['sz_unq'] += fsize
-                continue
+                continue # skip entry
 
             group_size = len(fdup[dx][hx])
             if (1 < group_size) :
@@ -471,7 +474,7 @@ def search_and_report(inargs):
 
     # Print statistics
     if inargs['stats'] :
-        print("\nExtended Statistics=>\n")
+        print("\nExtended statistics:\n")
         print("Processed Files:\t\t{}".format(fstats['processed_files']))
         print("Unique Files:\t\t\t{}".format(fstats['dup_files']))
         print("Duplicate Files:\t\t{}".format(fstats['unq_files']))
@@ -488,9 +491,8 @@ def search_and_report(inargs):
         print("")
 
 
-    # Return the results to the caller. If some other module
-    # called this method, they will get various data-structures
-    # as the result from this module.
+    # Return the results to the caller. If some other module called this method,
+    # they will get various data-structures as the result from this module.
     return (count, frec, fdup, fstats)
 
 def main():
