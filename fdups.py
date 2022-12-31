@@ -81,6 +81,7 @@ def show_doc() :
 def usage(progname, basedir) :
     print(progname + " [options]\n\n")
 
+    
     print("[(-b | --buffer-size) <in-bytes>] (default=%d). "
           "Temporary buffer size for reading file contents\n\t\t\t\tduring "
           "the hash computation process. Generally larger buffer"
@@ -111,6 +112,14 @@ def usage(progname, basedir) :
     print("[-l | --links]\t\t\t(default={}) Also check symbolic links.\n".format(
         __def_follow_links))
 
+    print("[--rm-auto]\t\t\tAutomatically remove duplicates while retaining the first one found.")
+    print("\t\t\t\tThis option doesn't require user confirmation. So be careful.\n")
+
+    print("[--rm-cnf]\t\t\tRemove duplicates while retaining the first one found.")
+    print("\t\t\t\tThis option requires user confirmation for each file deletion.\n")
+
+    print("[--rm-test]\t\t\tProcess removal request but don't actually remove files in the final step.")
+
     print("[-s | --stats]\t\t\tPrint additional statistics.\n")
     print("[-v | --verbose]\t\t(default=%d)\n" % __def_verbose)
     print("[-z | --zero-compare]\t\tCompare zero-byte size files, which usually "
@@ -131,6 +140,7 @@ def process_input():
                         sys.argv[1:], "b:d:D:hH:lR:svz",
                         ["buffer-size=", "debug=", "dir=",
                          "help", "hash=", "links", "refdir=",
+                         "rm-auto", "rm-cnf", "rm-test",
                          "stats", "verbose", "zero-compare"])
 
     except getopt.GetoptError as input_err:
@@ -150,6 +160,9 @@ def process_input():
     inargs['follow_links'] = __def_follow_links
     inargs['zero_cmp'] = False
     inargs['stats'] = False
+    inargs['rm_auto'] = False
+    inargs['rm_cnf'] = False
+    inargs['rm_test'] = False
 
     for arg, argval in opts:
         if arg in ("-b", "--buffer-size") :
@@ -177,6 +190,12 @@ def process_input():
           inargs['follow_links'] = True
         elif arg in ("-R", "--refdir") :
           inargs['refdir'] = str(argval)
+        elif arg in ("--rm-auto") :
+          inargs['rm_auto'] = True
+        elif arg in ("--rm-cnf") :
+          inargs['rm_cnf'] = True
+        elif arg in ("--rm-test") :
+          inargs['rm_test'] = True
         elif arg in ("-s", "--stats") :
           inargs['stats'] = True
         elif arg in ("-v", "--verbose") :
@@ -402,6 +421,8 @@ def search_and_report(inargs):
         print("\n{} total search time {} seconds\n".format(
             fn, time_delta.total_seconds()))
 
+    consent = ['y', 'yes', 'ye']
+
     # Analyze the results
     count = 0
     groups = 0
@@ -412,6 +433,7 @@ def search_and_report(inargs):
     fstats['sz_unq'] = 0
     fstats['sz_dup'] = 0
     fstats['hashed_files'] = 0
+    fstats['removed'] = 0
 
     for dx in fdup.keys() :
         for hx in fdup[dx].keys() :
@@ -428,13 +450,8 @@ def search_and_report(inargs):
                 continue # skip entry
 
             group_size = len(fdup[dx][hx])
+            printed_filenames = False
             if (1 < group_size) :
-
-                if (CLDBG_SUM <= inargs['debug']) :
-                    print("Group# {}\tgroup-size: {}\tHash({}): {}".
-                          format(groups, group_size, inargs['hash_algo'], hx))
-                    for fx in fdup[dx][hx] : print(fx)
-                    print("")
 
                 count += group_size
                 groups += 1
@@ -447,6 +464,50 @@ def search_and_report(inargs):
                 fstats['sz_tot'] += sz_grp
                 fstats['sz_dup'] += sz_grp
                 fstats['hashed_files'] += group_size
+
+                if (CLDBG_SUM <= inargs['debug']) :
+                    print("Group# {}\tgroup-size: {}\tfile-size: {}\tHash({}): {}".
+                          format(groups, group_size, fsize, inargs['hash_algo'], hx))
+                    for fx in fdup[dx][hx] : print(fx)
+                    print("")
+                    printed_filenames = True
+
+                # Optionally remove duplicates
+                if inargs['rm_cnf'] :
+                    # Interactive removal takes precedence
+                    if not printed_filenames :
+                        # You definitely want to show all the group members to the
+                        # user in an interactive removal scenario. So if you haven't
+                        # shown the filenames earlier, show those regardless of the
+                        # debug level of this script.
+                        print("Group# {}\tgroup-size: {}\tfile-size: {}\tHash({}): {}".
+                              format(groups, group_size, fsize, inargs['hash_algo'], hx))
+                        for fx in fdup[dx][hx] : print(fx)
+                        print("")
+                    for fx in fdup[dx][hx] :
+                        question = "Remove: '" + fx + "' ? (Y/ N)  "
+                        inpt = input(question)
+                        if inpt.lower() in consent :
+                            print("\nRemoval confirmed for: {}\n".format(fx))
+                            if not inargs['rm_test'] :
+                                fstats['removed'] += 1
+                                os.remove(fx)
+                        else :
+                            print("keeping file: {}\n".format(fx))
+                    print("\n\n")
+                elif inargs['rm_auto'] :
+                    id = 0
+                    for fx in fdup[dx][hx] :
+                        if (0 == id) :
+                            print("keeping: {}\n".format(fx))
+                        else :
+                            print("removing: {}\n".format(fx))
+                            if not inargs['rm_test'] :
+                                fstats['removed'] += 1
+                                os.remove(fx)
+                        id += 1
+                    print("\n\n")
+                    
             elif (1 == group_size) :
                 # Only file with a given hash value hx
                 fstats['unq_files'] += 1
@@ -465,6 +526,7 @@ def search_and_report(inargs):
         elif (CLDBG_SNGL <= inargs['debug']) :
             print(count)
 
+
     # Compute additional statistics
     fstats['processed_files'] = len(frec.keys())
     fstats['prcnt_dup'] = 100.0 * fstats['dup_files'] / fstats['processed_files']
@@ -476,8 +538,8 @@ def search_and_report(inargs):
     if inargs['stats'] :
         print("\nExtended statistics:\n")
         print("Processed Files:\t\t{}".format(fstats['processed_files']))
-        print("Unique Files:\t\t\t{}".format(fstats['dup_files']))
-        print("Duplicate Files:\t\t{}".format(fstats['unq_files']))
+        print("Unique Files:\t\t\t{}".format(fstats['unq_files']))
+        print("Duplicate Files:\t\t{}".format(fstats['dup_files']))
         print("% Unique Files:\t\t\t{} %".format(fstats['prcnt_unq']))
         print("% Duplicate Files:\t\t{} %".format(fstats['prcnt_dup']))
         print("Total space consumed:\t\t{} bytes".format(fstats['sz_tot']))
@@ -488,6 +550,7 @@ def search_and_report(inargs):
         print("File search time:\t\t{} seconds".format(time_delta.total_seconds()))
         print("Hashing algorithm:\t\t{}".format(inargs['hash_algo'].upper()))
         print("Total files hashed:\t\t{}".format(fstats['hashed_files']))
+        print("Total files removed:\t\t{}".format(fstats['removed']))
         print("")
 
 
