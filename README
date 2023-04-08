@@ -1,0 +1,9 @@
+
+fdups is a Python tool to efficiently detect duplicate files across large file-systems.
+It is open-source software. Read the LICENSE file for further details.
+
+========================================================================================
+
+We recommend to use fdups from Python virtual environment installed in this same
+repository. See the 'source.me' file on how it's to be installed underneath a
+sub-directory called 'env' in the same directory as this README file.
