@@ -24,8 +24,24 @@ __def_hash_algo         = "sha1" # Default file hashing algorithm
 __def_follow_links      = False # Default file hashing algorithm
 __def_buf_size          = 1048576  # lets read stuff in 64kb chunks!
 
+__version_string        = "1.0 2023/11/23"
+
 
 __design_doc = """
+ **** Examples ****
+# Mode-1: Basic invocation
+$ ./fdups.py -D ~/basedir
+
+# Mode-2: Basic invocation
+$ ./fdups.py -D ~/basedir -R /tmp/refdir
+
+# Mode-1: Extended statistics
+$ ./fdups.py -s -D ~/basedir
+
+# Mode-1: Quiet mode, just returns the integer result (duplicate files)
+$ ./fdups.py -s -D ~/basedir
+
+
  **** Design Documentation ****
 
  This script works in one of the two modes:
@@ -81,7 +97,7 @@ def show_doc() :
 def usage(progname, basedir) :
     print(progname + " [options]\n\n")
 
-    
+
     print("[(-b | --buffer-size) <in-bytes>] (default=%d). "
           "Temporary buffer size for reading file contents\n\t\t\t\tduring "
           "the hash computation process. Generally larger buffer"
@@ -98,7 +114,7 @@ def usage(progname, basedir) :
           "Search for duplicates is restricted to\n\t\t\t\tfiles within this tree or"
           " the files from the base directory that are also\n\t\t\t\tpresent in the"
           " reference directory. Files within the base directory that are "
-          "\n\t\t\t\tduplicates of each other but are missing from the reference are NOT "
+          "\n\t\t\t\tduplicates of each other but are missing from the reference are NOT"
           " reported.\n\t\t\t\tThis feature is deemed useful before merging a new reference "
           " directory content\n\t\t\t\twith the existing, large base directory.\n")
 
@@ -122,6 +138,7 @@ def usage(progname, basedir) :
 
     print("[-s | --stats]\t\t\tPrint additional statistics.\n")
     print("[-v | --verbose]\t\t(default=%d)\n" % __def_verbose)
+    print("[-V | --version]\t\tPrint version number of this tool & exit.\n")
     print("[-z | --zero-compare]\t\tCompare zero-byte size files, which usually "
           "isn't very meaningful. ")
     print("\n")
@@ -137,11 +154,11 @@ def process_input():
 
     try:
         opts, args = getopt.getopt(
-                        sys.argv[1:], "b:d:D:hH:lR:svz",
+                        sys.argv[1:], "b:d:D:hH:lR:svVz",
                         ["buffer-size=", "debug=", "dir=",
                          "help", "hash=", "links", "refdir=",
                          "rm-auto", "rm-cnf", "rm-test",
-                         "stats", "verbose", "zero-compare"])
+                         "stats", "verbose", "version", "zero-compare"])
 
     except getopt.GetoptError as input_err:
         print(input_err)
@@ -200,6 +217,9 @@ def process_input():
           inargs['stats'] = True
         elif arg in ("-v", "--verbose") :
           inargs['debug'] = __def_verbose
+        elif arg in ("-V", "--version") :
+          print("%s" % __version_string)
+          sys.exit(0)
         elif arg in ("-z", "--zero-compare") :
           inargs['zero_cmp'] =  True
         else :
@@ -507,7 +527,7 @@ def search_and_report(inargs):
                                 os.remove(fx)
                         id += 1
                     print("\n\n")
-                    
+
             elif (1 == group_size) :
                 # Only file with a given hash value hx
                 fstats['unq_files'] += 1
