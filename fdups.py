@@ -24,9 +24,14 @@ __def_hash_algo         = "sha1" # Default file hashing algorithm
 __def_follow_links      = False # Default file hashing algorithm
 __def_buf_size          = 1048576  # lets read stuff in 64kb chunks!
 
-__version_string        = "1.0 2023/11/23"
+__version_string        = "1.0 2023/11/24"
+
+# Origin of the file placed in the 'frec' data-structure.
+FSOURCE_REF = 2
+FSOURCE_BASE = 1
 
 __design_doc = """
+
  **** Examples ****
 # Mode-1: Basic invocation
 $ ./fdups.py -D ~/basedir
@@ -42,6 +47,10 @@ $ ./fdups.py -s -D ~/basedir
 
 # Mode-2: Report Unique (New) files from reference directory
 $ ./fdups.py -u -D ~/basedir -R /tmp/refdir
+
+# Mode-2: Report Unique (New) files as an integer only (quiet mode)
+$ ./fdups.py -d 0 -u -D ~/basedir -R /tmp/refdir
+
 
  **** Design Documentation ****
 
@@ -88,6 +97,13 @@ $ ./fdups.py -u -D ~/basedir -R /tmp/refdir
 
  This module can be used as a library if the callers invoke "search_and_report()"
  Alternatively the modules can be directly invoked as a command-line utility.
+
+ The '-u' flag sets the search & reporting logic to find files from the reference
+ set that are NOT present in the base set; something very different from the
+ duplicate detection strategy. This helps find new files from the reference
+ that should be integrated with the base in order to maintain that as a superset.
+ Of course the actual merging is not done by the script but is rather left for
+ the user.
 
 """
 
@@ -286,7 +302,7 @@ def get_file_hash(inargs, filename) :
     return (status, hashval)
 
 
-def build_frec(inargs, basedir, frec, fdup) :
+def build_frec(inargs, basedir, frec, fdup, fsource) :
     count = 0
     fn = 'build_frec'
     zero_cmp = inargs['zero_cmp'] # Avoiding reading inargs multiple times
@@ -381,7 +397,7 @@ def build_frec(inargs, basedir, frec, fdup) :
                                 continue
 
                         fdup[file_size][file_hash] = [tmp_file]
-                        frec[tmp_file]['hash'] = file_hash
+                        frec[tmp_file]['hash'] = file_hash # TBD remove this
 
                         # Permanently disable this record by writing empty filename
                         fdup[file_size][__tmp_rec] = ''
@@ -414,6 +430,7 @@ def build_frec(inargs, basedir, frec, fdup) :
             frec[full_name] = dict()
             frec[full_name]['size'] = file_size
             frec[full_name]['hash'] = file_hash
+            frec[full_name]['fsource'] = fsource
 
             if (CLDBG_VER1 <= inargs['debug']) :
                 print("%s prefix[%s]\t[%s] size=%ld" %
@@ -441,10 +458,12 @@ def search_and_report(inargs):
         # be identical to some from the reference directory. In other words if
         # there are duplicates in the base-directory without any matching files
         # in the reference directory, those will be silently ignored.
-        (count, frec, fdup) = build_frec(inargs, inargs['refdir'], frec, fdup)
+        (count, frec, fdup) = build_frec(inargs, inargs['refdir'],
+                                         frec, fdup, FSOURCE_REF)
 
     # Final computation of duplicates
-    (count, frec, fdup) = build_frec(inargs, inargs['basedir'], frec, fdup)
+    (count, frec, fdup) = build_frec(inargs, inargs['basedir'],
+                                     frec, fdup, FSOURCE_BASE)
 
     time_stamp_2 = datetime.datetime.now()
     time_delta = time_stamp_2 - time_stamp_1
@@ -483,8 +502,10 @@ def search_and_report(inargs):
                     fsize = frec[fname]['size']
                     fstats['sz_tot'] += fsize
                     fstats['sz_unq'] += fsize
-                    if inargs['search_unique'] and (CLDBG_SUM <= inargs['debug']) :
-                        print("Unq: %s\n" % fname)
+                    fsource_ref = (FSOURCE_REF == frec[fname]['fsource'])
+
+                    if inargs['search_unique'] and (CLDBG_SUM <= inargs['debug']) and fsource_ref:
+                        print("%s\n" % fname)
                 continue # skip entry
 
             group_size = len(fdup[dx][hx])
@@ -555,8 +576,10 @@ def search_and_report(inargs):
                 fstats['sz_tot'] += fsize
                 fstats['sz_unq'] += fsize
                 fstats['hashed_files'] += 1
-                if inargs['search_unique'] and (CLDBG_SUM <= inargs['debug']) :
-                    print("Unq: %s\n" % fname)
+                fsource_ref = (FSOURCE_REF == frec[fname]['fsource'])
+
+                if inargs['search_unique'] and (CLDBG_SUM <= inargs['debug']) and fsource_ref :
+                    print("%s\n" % fname)
 
     # Report the results
     if (0 < groups) and not inargs['search_unique'] :
