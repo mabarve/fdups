@@ -26,7 +26,6 @@ __def_buf_size          = 1048576  # lets read stuff in 64kb chunks!
 
 __version_string        = "1.0 2023/11/23"
 
-
 __design_doc = """
  **** Examples ****
 # Mode-1: Basic invocation
@@ -41,6 +40,8 @@ $ ./fdups.py -s -D ~/basedir
 # Mode-1: Quiet mode, just returns the integer result (duplicate files)
 $ ./fdups.py -s -D ~/basedir
 
+# Mode-2: Report Unique (New) files from reference directory
+$ ./fdups.py -u -D ~/basedir -R /tmp/refdir
 
  **** Design Documentation ****
 
@@ -154,11 +155,12 @@ def process_input():
 
     try:
         opts, args = getopt.getopt(
-                        sys.argv[1:], "b:d:D:hH:lR:svVz",
+                        sys.argv[1:], "b:d:D:hH:lR:suvVz",
                         ["buffer-size=", "debug=", "dir=",
                          "help", "hash=", "links", "refdir=",
                          "rm-auto", "rm-cnf", "rm-test",
-                         "stats", "verbose", "version", "zero-compare"])
+                         "stats", "unique",
+                         "verbose", "version", "zero-compare"])
 
     except getopt.GetoptError as input_err:
         print(input_err)
@@ -180,6 +182,7 @@ def process_input():
     inargs['rm_auto'] = False
     inargs['rm_cnf'] = False
     inargs['rm_test'] = False
+    inargs['search_unique'] = False
 
     for arg, argval in opts:
         if arg in ("-b", "--buffer-size") :
@@ -215,6 +218,8 @@ def process_input():
           inargs['rm_test'] = True
         elif arg in ("-s", "--stats") :
           inargs['stats'] = True
+        elif arg in ("-u", "--unique") :
+          inargs['search_unique'] = True
         elif arg in ("-v", "--verbose") :
           inargs['debug'] = __def_verbose
         elif arg in ("-V", "--version") :
@@ -225,6 +230,13 @@ def process_input():
         else :
             assert False, "unknown option %s" % arg
     # end-for
+
+    # Sanity checks
+    if inargs['search_unique'] and not 'refdir' in inargs.keys() :
+        print("Unique file search requires both base & reference directories.")
+        print("Read help/ documentations for more details.\n")
+        usage(sys.argv[0], basedir)
+        sys.exit()
 
     return inargs
 
@@ -454,6 +466,10 @@ def search_and_report(inargs):
     fstats['sz_dup'] = 0
     fstats['hashed_files'] = 0
     fstats['removed'] = 0
+    fstats['prcnt_dup'] = 0
+    fstats['prcnt_unq'] = 0
+    fstats['prcnt_sz_unq'] = 0
+    fstats['prcnt_sz_dup'] = 0
 
     for dx in fdup.keys() :
         for hx in fdup[dx].keys() :
@@ -467,11 +483,13 @@ def search_and_report(inargs):
                     fsize = frec[fname]['size']
                     fstats['sz_tot'] += fsize
                     fstats['sz_unq'] += fsize
+                    if inargs['search_unique'] and (CLDBG_SUM <= inargs['debug']) :
+                        print("Unq: %s\n" % fname)
                 continue # skip entry
 
             group_size = len(fdup[dx][hx])
             printed_filenames = False
-            if (1 < group_size) :
+            if (1 < group_size) and not inargs['search_unique'] :
 
                 count += group_size
                 groups += 1
@@ -486,8 +504,8 @@ def search_and_report(inargs):
                 fstats['hashed_files'] += group_size
 
                 if (CLDBG_SUM <= inargs['debug']) :
-                    print("Group# {}\tgroup-size: {}\tfile-size: {}\tHash({}): {}".
-                          format(groups, group_size, fsize, inargs['hash_algo'], hx))
+                    print("Group# {}\tgroup-size: {}\tHash({}): {}\tfile-size: {}".
+                          format(groups, group_size, inargs['hash_algo'], hx, fsize))
                     for fx in fdup[dx][hx] : print(fx)
                     print("")
                     printed_filenames = True
@@ -537,22 +555,35 @@ def search_and_report(inargs):
                 fstats['sz_tot'] += fsize
                 fstats['sz_unq'] += fsize
                 fstats['hashed_files'] += 1
+                if inargs['search_unique'] and (CLDBG_SUM <= inargs['debug']) :
+                    print("Unq: %s\n" % fname)
 
     # Report the results
-    if (0 < groups) :
+    if (0 < groups) and not inargs['search_unique'] :
+        # Report on duplicate files
         if (CLDBG_SUM <= inargs['debug']) :
             print("\nTotal duplicate-file-groups: {}, duplicate-files:{}\n".
                   format(groups, count))
         elif (CLDBG_SNGL <= inargs['debug']) :
             print(count)
 
+    if inargs['search_unique'] :
+       # Report on unique files
+        count = fstats['unq_files']
+        if (CLDBG_SUM <= inargs['debug']) :
+            print("\nTotal unique files: {}\n".format(count))
+        elif (CLDBG_SNGL <= inargs['debug']) :
+            print(count)
 
     # Compute additional statistics
     fstats['processed_files'] = len(frec.keys())
-    fstats['prcnt_dup'] = 100.0 * fstats['dup_files'] / fstats['processed_files']
-    fstats['prcnt_unq'] = 100.0 * fstats['unq_files'] / fstats['processed_files']
-    fstats['prcnt_sz_unq'] = 100.0 * fstats['sz_unq'] / fstats['sz_tot']
-    fstats['prcnt_sz_dup'] = 100.0 * fstats['sz_dup'] / fstats['sz_tot']
+    if (0 < fstats['processed_files']) :
+        fstats['prcnt_dup'] = 100.0 * fstats['dup_files'] / fstats['processed_files']
+        fstats['prcnt_unq'] = 100.0 * fstats['unq_files'] / fstats['processed_files']
+
+    if (0 < fstats['sz_tot']) :
+        fstats['prcnt_sz_unq'] = 100.0 * fstats['sz_unq'] / fstats['sz_tot']
+        fstats['prcnt_sz_dup'] = 100.0 * fstats['sz_dup'] / fstats['sz_tot']
 
     # Print statistics
     if inargs['stats'] :
