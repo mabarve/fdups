@@ -24,7 +24,7 @@ __def_hash_algo         = "sha1" # Default file hashing algorithm
 __def_follow_links      = False # Default file hashing algorithm
 __def_buf_size          = 1048576  # lets read stuff in 64kb chunks!
 
-__version_string        = "1.0 2023/11/24"
+__version_string        = "1.0.1 2023/12/25"
 
 # Origin of the file placed in the 'frec' data-structure.
 FSOURCE_REF = 2
@@ -98,12 +98,12 @@ $ ./fdups.py -d 0 -u -D ~/basedir -R /tmp/refdir
  This module can be used as a library if the callers invoke "search_and_report()"
  Alternatively the modules can be directly invoked as a command-line utility.
 
- The '-u' flag sets the search & reporting logic to find files from the reference
- set that are NOT present in the base set; something very different from the
- duplicate detection strategy. This helps find new files from the reference
- that should be integrated with the base in order to maintain that as a superset.
- Of course the actual merging is not done by the script but is rather left for
- the user.
+ The '-u / --unique' flag sets the search & reporting logic to find files from
+ the reference set that are NOT present in the base set; something very different
+ from the duplicate detection strategy. This helps find new files from the
+ reference that should be integrated with the base in order to maintain that as a
+ superset. Of course the actual merging is not done by the script but is rather
+ left for the user.
 
 """
 
@@ -148,12 +148,18 @@ def usage(progname, basedir) :
     print("[--rm-auto]\t\t\tAutomatically remove duplicates while retaining the first one found.")
     print("\t\t\t\tThis option doesn't require user confirmation. So be careful.\n")
 
-    print("[--rm-cnf]\t\t\tRemove duplicates while retaining the first one found.")
+    print("[--rm-cnf]\t\t\tRemove duplicates while retaining the first one found.\n")
     print("\t\t\t\tThis option requires user confirmation for each file deletion.\n")
 
-    print("[--rm-test]\t\t\tProcess removal request but don't actually remove files in the final step.")
+    print("[--rm-test]\t\t\tProcess removal request but don't actually remove files"
+          "in the final step.\n")
 
     print("[-s | --stats]\t\t\tPrint additional statistics.\n")
+    print("[-u | --unique]\t\t\tFind files from the reference directory (-R) "
+          "that are missing in the base (-D) set.\n\t\t\t\tThis option therefore requires "
+          "both base and reference directories specified.\n\t\t\t\tIt does NOT "
+          "detect duplicate files. Instead it detects relatively unique files.\n")
+
     print("[-v | --verbose]\t\t(default=%d)\n" % __def_verbose)
     print("[-V | --version]\t\tPrint version number of this tool & exit.\n")
     print("[-z | --zero-compare]\t\tCompare zero-byte size files, which usually "
